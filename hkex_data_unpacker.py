@@ -1,6 +1,7 @@
 # coding: utf-8
 
 import struct
+import json
 from datetime import datetime
 
 
@@ -8,8 +9,10 @@ class Unpacker(object):
 
     def __init__(self, packed_data_file_path):
 
+        self.packed_data_file_path = packed_data_file_path
+
         # 载入数据
-        with open(packed_data_file_path, 'rb') as f:
+        with open(self.packed_data_file_path, 'rb') as f:
             self.data = f.read()
 
         self.data_len = len(self.data)
@@ -146,7 +149,6 @@ class Unpacker(object):
         return result
 
     def _parse_SecurityDefinition(self, data, result):
-        data_len = len(data)
 
         spec = [
             ('SecurityCode', 'I', 4),
@@ -202,13 +204,71 @@ class Unpacker(object):
 
             offset += s[2]
 
+        if result['NoUnderlyingSecurities']:
+            UnderlyingSecurity = []
+            UnderlyingSecurityCount = result['NoUnderlyingSecurities']
+            while UnderlyingSecurityCount:
+
+                UnderlyingSecurityItem = {}
+                UnderlyingSecurityItem['Code'] = struct.unpack('I', data[offset:offset+4])[0]
+                offset += 4
+
+                UnderlyingSecurityItem['Weight'] = struct.unpack('I', data[offset:offset+4])[0]
+                offset += 4
+
+                UnderlyingSecurity.append(UnderlyingSecurityItem)
+                
+                UnderlyingSecurityCount -= 1
+
+            result['UnderlyingSecurity'] = UnderlyingSecurity
+
         return result
 
     def _parse_LiquidityProvider(self, data, result):
-        pass
+
+        offset = 0
+        
+        result['SecurityCode'] = struct.unpack('I', data[offset:offset+4])[0]
+        offset += 4
+
+        result['NoLiquidityProviders'] = struct.unpack('H', data[offset:offset+2])[0]
+        offset += 2
+
+        if result['NoLiquidityProviders']:
+            LPBrokerNumber = []
+            NoLiquidityProvidersCount = result['NoLiquidityProviders']
+            while NoLiquidityProvidersCount:
+                
+                LPBrokerNumber.append(struct.unpack('H', data[offset:offset+2])[0])
+                offset += 2
+
+                NoLiquidityProvidersCount -= 1
+
+            result['LPBrokerNumber'] = LPBrokerNumber
+
+        return result
 
     def _parse_CurrentRate(self, data, result):
-        pass
+        
+        spec = [
+            ('CurrencyCode', '3s', 3),
+            ('Filler', '1s', 1),
+            ('CurrencyFactor', 'H', 2),
+            ('Filler', '2s', 2),
+            ('CurrencyRate', 'I', 4),
+        ]
+
+        offset = 0
+
+        for s in spec:
+            result[s[0]] = struct.unpack(s[1], data[offset:offset+s[2]])[0]
+
+            if isinstance(result[s[0]], str):
+                result[s[0]] = result[s[0]].strip()
+
+            offset += s[2]
+
+        return result
 
 
     def unpack(self):
@@ -256,20 +316,51 @@ class Unpacker(object):
                 if MsgType == 11:
                     result = self._parse_SecurityDefinition(MsgData, result)
                     self.SecurityDefinition_results.append(result)
-                    print(result)
-                    print('MsgSize: {}, MsgType: {}, MsgData: {}'.format(MsgSize, MsgType, self._data_hex(MsgData)))
 
+                # Liquidity Provider
+                if MsgType == 13:
+                    result = self._parse_LiquidityProvider(MsgData, result)
+                    self.LiquidityProvider_results.append(result)
 
-                # if MsgType != 100 and MsgType != 11:
-
-                #     
-
+                # Currency Rate
+                if MsgType == 14:
+                    result = self._parse_CurrentRate(MsgData, result)
+                    self.CurrentRate_results.append(result)
 
             if not self._check_valid_offset():
                 break
 
-        print('TotalMsg: {}'.format(TotalMsg))
-        print('Total MarketDefinition Results: {}'.format(len(self.MarketDefinition_results)))
+        print('Market Definition: {}'.format(len(self.MarketDefinition_results)))
+        print('Security Definition: {}'.format(len(self.SecurityDefinition_results)))
+        print('NoLiquidity Provider: {}'.format(len(self.LiquidityProvider_results)))
+        print('Currency Rate: {}'.format(len(self.CurrentRate_results)))
+
+    def _dump2json(self, file_path, result):
+        with open(file_path, 'w') as f:
+            f.write(json.dumps(result))
+
+
+    def dump2json(self):
+        if self.MarketDefinition_results:
+            self._dump2json(
+                self.packed_data_file_path+'_MarketDefinition.json',
+                self.MarketDefinition_results)
+
+        if self.SecurityDefinition_results:
+            self._dump2json(
+                self.packed_data_file_path+'_SecurityDefinition.json',
+                self.SecurityDefinition_results)
+
+        if self.LiquidityProvider_results:
+            self._dump2json(
+                self.packed_data_file_path+'_LiquidityProvider.json',
+                self.LiquidityProvider_results)
+
+        if self.CurrentRate_results:
+            self._dump2json(
+                self.packed_data_file_path+'_CurrentRate.json',
+                self.CurrentRate_results)
+
 
 
 if __name__ == '__main__':
@@ -277,3 +368,4 @@ if __name__ == '__main__':
 
     unpacker = Unpacker(data_file)
     unpacker.unpack()
+    unpacker.dump2json()
